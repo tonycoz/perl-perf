@@ -1,0 +1,6 @@
+*~
+Makefile
+blib
+perl5
+MYMETA.*
+pm_to_blib

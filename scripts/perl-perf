@@ -1,0 +1,6 @@
+#!perl
+use v5.32.0;
+use Perl::Perf::Defaults;
+use Perl::Perf::Cmd;
+
+Perl::Perf::Cmd->new->cmd(\@ARGV);
