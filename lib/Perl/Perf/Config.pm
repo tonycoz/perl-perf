@@ -49,12 +49,17 @@ sub parse ($class, $content, $type, $file) {
 }
 
 sub fill_defaults ($class, $data) {
-  $data->{clone} //= "perl";
+  $data->{clone} //= path(".")->child("perl");
+  $data->{prefix} //= path(".")->child("prefix");
   $data->{branches} //=
     +{
       "blead" => [ ], # HEAD is always tested
       'maint-5.*' => [ ],
       'smoke-me/*' => [ ],
+     };
+  $data->{builds} //=
+    +{
+      "default" => {}
      };
 
   $data;

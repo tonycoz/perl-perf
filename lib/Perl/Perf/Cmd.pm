@@ -38,6 +38,11 @@ EOS
    config => <<'EOS',
 perl-perf config key.key.... - display given key from the configuration
 EOS
+   build => <<'EOS'
+perl-perf build [-v] [build-name] - build perl based on the configuration
+   build-name defaults to "default"
+   -v - displays output of build commands
+EOS
    );
 
 sub cmd_help ($self, $args) {
@@ -99,6 +104,38 @@ sub cmd_config ($self, $args) {
     require Cpanel::JSON::XS;
     say $out Cpanel::JSON::XS->new->pretty(1)->canonical(1)->encode($cfg);
   }
+}
+
+sub cmd_build ($self, $args) {
+  my $cfg = $self->_config;
+
+  my $verbose;
+  GetOptionsFromArray($args,
+		      "v" => \$verbose);
+  require Perl::Perf::Build;
+  my $build_name = @$args ? shift @$args : "default";
+  @$args
+    and $self->_usage("build", "$0 build: Too many arguments\n");
+  my $result = Perl::Perf::Build->new($cfg)->build
+    ( { args => $args, verbose => $verbose } );
+  if ($result->{error}) {
+    die "$0 build: $result->{error}\n";
+  }
+  else {
+    print "Build success!\n" if $verbose;
+  }
+}
+
+sub _usage ($self, $cmd, $error = undef) {
+  print STDERR $error if defined $error;
+  $cmd //= "";
+  if ($help{$cmd}) {
+    print STDERR $help{$cmd};
+  }
+  else {
+    print STDERR "Unknown usage '$cmd'\n";
+  }
+  exit 1;
 }
 
 1;
