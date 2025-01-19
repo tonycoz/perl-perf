@@ -1,0 +1,21 @@
+#!perl
+use v5.36;
+
+$ENV{PKG_CONFIG_PATH} = "/home/tony/local/libperf/lib64/pkgconfig/";
+
+my $git = "/home/tony/dev/perl/git/perf-perl-github";
+my $install = "/home/tony/dev/perl/git/perl-perf-built";
+my $reports = "/home/tony/dev/perl/git/perl-perf-reports";
+
+for my $sha (@ARGV) {
+  my $report = "$reports/$sha.json";
+  my $log = "$reports/$sha.log";
+
+  print "$sha\n";
+  unless (-f $report) {
+    system "perl scripts/perl-perf-poc $git $sha $install $report >$log 2>&1"
+      and next;
+    system "lwp-request -m PUT -c application/json https://perldev.develop-help.com/api/perf/vdev/report/$sha/poc <$report";
+  }
+}
+
