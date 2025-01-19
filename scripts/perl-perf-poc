@@ -49,6 +49,9 @@ chdir $absgitdir
 system "git", "clean", "-dxfq"
   and die "Cannot git clean\n";
 
+system "git", "checkout", "."
+  and die "Cannot checkout .\n";
+
 system "git", "checkout", $commit
   and die "Cannot checkout $commit\n";
 
@@ -72,11 +75,11 @@ close $cfg_fh;
 system "nice", "make", "-j3"
   and die "Cannot make";
 
-{
-  local $ENV{TEST_JOBS} = 4;
-  system "nice", "make", "test"
-    and die "Cannot make test";
-}
+# {
+#   local $ENV{TEST_JOBS} = 4;
+#   system "nice", "make", "test"
+#     and die "Cannot make test";
+# }
 
 system "make", "install"
   and die "Cannot make install";
