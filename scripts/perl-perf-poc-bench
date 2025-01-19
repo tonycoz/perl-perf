@@ -1,0 +1,178 @@
+#!perl
+use strict;
+use warnings;
+use Linux::libperf::Simple;
+use JSON::PP;
+
+my $benchmarks = shift;
+my $outname = shift
+  or die "Usage: $0 benchmarksfile outputfile\n";
+
+my $tests;
+$tests = do $benchmarks;
+
+unless ($tests) {
+  die "$benchmarks didn't return a true value\n"
+    if defined $tests;
+  die "Cannot parse $benchmarks:\n$@\n"
+    if $@;
+  die "Cannot read $benchmarks: $!\n";
+}
+
+ref $tests eq "ARRAY"
+  or die "$benchmarks doesn't return an arrayref";
+@$tests % 2
+  and die "$benchmarks has an odd number of elements (should be name, hash pairs\n";
+
+my @pairs;
+my @work = @$tests;
+my $index = 0;
+my @mytests;
+while (@work) {
+  my ($name, $test) = splice @work, 0, 2;
+
+  $name =~ /^[a-zA-Z]\w*(::\w+)*$/
+    or die "$index: Name '$name' invalid\n";
+
+  ref $test eq "HASH"
+    or die "$index: Test entry not a hash\n";
+
+  my $desc = $test->{desc} || $test->{code};
+  ref $test->{desc}
+    and die "$index:$name: desc must be text, not a reference\n";
+  my $setup = $test->{setup};
+  if (defined $setup ) {
+    ref $test->{setup}
+      and die "$index:$name: setup key must be text\n";
+    $setup = "$setup;" if length $setup;
+  }
+  else {
+    $setup = '';
+  }
+  my $code = $test->{code}
+    or die "$index:$name: No code key or empty\n";
+
+  my $pre = $test->{pre};
+  defined $pre or $pre = '';
+  $pre  = defined $pre  ? "$pre;" : "";
+  my $post = $test->{post};
+  $post = defined $post ? "$post;" : "";
+
+  my $inside0 = "$pre$post";
+  my $inside1 = "$pre$code;$post";
+  # bench.pl does this, but no tests seem to use it
+  my $compile = $test->{compile};
+  if ($compile) {
+    $inside0 = "eval q{sub { $inside0 }}";
+    $inside1 = "eval q{sub { $inside1 }}";
+  }
+  my @gen;
+  my @code;
+  for my $inside ($inside0, $inside1) {
+    my $sub = <<EOS;
+no warnings;
+no strict;
+sub {
+  srand(0);
+  my \$__count = shift;
+  my \$__perf = Linux::libperf::Simple->new;
+  $setup
+\$__perf->enable;
+  for my \$__iter (1 .. \$__count) {
+$inside
+  }
+\$__perf->disable;
+return \$__perf->results;
+}
+EOS
+    #print "$name: $sub\n";
+    my $gen = eval $sub
+      or die "$index:$name:Could not compile generated code\n$sub\n";
+    push @gen, $gen;
+    push @code, $sub;
+  }
+
+  push @mytests,
+    [
+     $name,
+     {
+      gen => \@gen,
+      code => \@code ,
+     },
+    ];
+
+  ++$index;
+}
+
+my %results;
+my $iter = 1000;
+for my $mytest (@mytests) {
+  my ($name, $entry) = @$mytest;
+  print "$name\n";
+  #use Data::Dumper; print Dumper($entry);
+  my $gen = $entry->{gen} || die;
+  # prime caches			   #
+  $gen->[0]->(10);
+  my @result0;
+  for (1 .. 10) {
+    push @result0, xform_result($gen->[0]->($iter));
+  }
+  # prime caches			   #
+  $gen->[1]->(10);
+  my @result1;
+  for (1 .. 10) {
+    push @result1, xform_result($gen->[1]->($iter));
+  }
+  $results{$name} =
+    {
+     result0 => _collate(\@result0),
+     result1 => _collate(\@result1),
+     code0 => $entry->{code}[0],
+     code1 => $entry->{code}[1],
+    };
+}
+
+# other details like the commit, cpu info will be added by the
+# caller
+my %full =
+  (
+   method =>
+   {
+    name => "POC-libperf",
+    iterations => $iter,
+   },
+   version => "unknown",
+   dependencies => {
+     "Linux::libperf::Simple" => $Linux::libperf::Simple::VERSION,
+   },
+   results => \%results,
+  );
+
+open my $fh, ">:raw", $outname
+  or die "Cannot create $outname: $!\n";
+my $json_enc = JSON::PP->new->canonical;
+print $fh $json_enc->encode(\%full);
+close $fh
+  or die "Cannot close $outname: $!\n";
+
+sub xform_result {
+  my $result = shift;
+
+  my %out;
+  for my $key (keys %$result) {
+    $out{$key} = ref $result->{$key} ? $result->{$key}{val} : $result->{$key};
+  }
+  \%out;
+}
+
+sub _collate {
+  my $in = shift;
+  my %out;
+  for my $result (@$in) {
+    for my $key (keys %$result) {
+      push @{$out{$key}}, $result->{$key};
+    }
+  }
+
+  \%out;
+}

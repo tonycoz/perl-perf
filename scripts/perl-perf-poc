@@ -1,0 +1,164 @@
+#!perl
+use v5.36;
+use File::Spec;
+use Cwd;
+use JSON::PP;
+use FindBin;
+
+my $gitdir = shift;
+my $commit = shift;
+my $base = shift;
+my $outfile = shift
+  or die "Usage: $0 checkoutdir sha base outfile\n";
+
+my $start = getcwd();
+
+my $absbench = File::Spec->catfile($FindBin::Bin, "perl-perf-poc-bench");
+
+my $absgitdir = File::Spec->rel2abs($gitdir)
+  or die "Cannot rel2abs $gitdir";
+
+my $absbase = File::Spec->rel2abs($base)
+  or die "Cannot rel2abs $base";
+
+my $absoutfile = File::Spec->rel2abs($outfile)
+  or die "Cannot rel2abs $outfile";
+
+my $inst = "$absbase/$commit-poc";
+
+my $absbenchmarks = File::Spec->catfile($absgitdir, "t", "perf", "benchmarks");
+
+-f $absbenchmarks
+  or die "Cannot find file $absbenchmarks: $!\n";
+
+-f $absbench
+  or die "Cannot find $absbench: $!\n";
+
+print <<EOS;
+gitdir  : $absgitdir
+commit  : $commit
+instbase: $absbase
+inst    : $inst
+outfile : $absoutfile
+bench   : $absbench
+EOS
+
+chdir $absgitdir
+  or die "Cannot chdir $gitdir: $!\n";
+
+system "git", "clean", "-dxfq"
+  and die "Cannot git clean\n";
+
+system "git", "checkout", $commit
+  and die "Cannot checkout $commit\n";
+
+system "./Configure", "-des", "-Dprefix=$inst", "-Uversiononly", "-Dusedevel"
+  and die "Cannot configure";
+
+my %build_cfg;
+my $config_name = "$absgitdir/config.sh";
+open my $cfg_fh, "<", $config_name
+  or die "Cannot open $config_name: $!\n";
+while (<$cfg_fh>) {
+  next if /^#/;
+  next unless /^(\w+)=(.*)$/;
+  my ($key, $val) = ($1, $2);
+  $val =~ s/^'(.*)'$/$1/;
+  $build_cfg{$key} = $val;
+}
+close $cfg_fh;
+#$build_cfg{cc} eq "cc" or die;
+
+system "nice", "make", "-j3"
+  and die "Cannot make";
+
+{
+  local $ENV{TEST_JOBS} = 4;
+  system "nice", "make", "test"
+    and die "Cannot make test";
+}
+
+system "make", "install"
+  and die "Cannot make install";
+
+system "$inst/bin/cpan", "Linux::libperf::Simple"
+  and die "Cannot install Linux::libperf::Simple";
+
+{
+  local $ENV{PERL_HASH_SEED} = "0";
+  system "$inst/bin/perl", $absbench, $absbenchmarks, $absoutfile
+    and die "Cannot run benchmark: $!";
+}
+
+my $json;
+
+{
+  open my $fh, "<:raw", $absoutfile
+    or die "Cannot open $absoutfile: $!\n";
+  $json = do { local $/; <$fh> };
+  close $fh;
+}
+
+my $bench_data = decode_json($json);
+
+# rearrange a bit
+chomp(my $uname = `uname -a`);
+
+my $deps = delete $bench_data->{dependencies} || {};
+
+my %result =
+  (
+   system =>
+   {
+    uname => $build_cfg{myuname},
+    cc => $build_cfg{cc},
+    ccversion => $build_cfg{ccversion} || $build_cfg{gccversion} || "unknown",
+    cpu => cpu_info(),
+   },
+   config =>
+   {
+    config_args => [ config_args(\%build_cfg) ],
+    map { $_ => $build_cfg{$_} }
+    qw( ccflags usethreads usemultiplicity useshrplib optimize
+	uselongdouble usequadmath
+	alignbytes ),
+   },
+   benchmark => $bench_data,
+  );
+
+{
+  open my $fh, ">:raw", $absoutfile
+    or die "Cannot overwrite $absoutfile: $!\n";
+  print $fh encode_json(\%result);
+  close $fh
+    or die "Cannot close $outfile: $!\n";
+}
+
+sub config_args {
+  my $config = shift;
+
+  my @result;
+  for my $num (0 .. $config->{config_argc}) {
+    my $arg = $config->{"config_arg$num"};
+    if ($arg =~ /^-Dprefix=/) {
+      $arg = "-Dprefix=...";
+    }
+    push @result, $arg;
+  }
+
+  @result;
+}
+
+# this will definitely change
+sub cpu_info {
+  open my $fh, "<", "/proc/cpuinfo"
+    or die "Cannot open /proc/cpuinfo: $!\n";
+  my %summary;
+  while (<$fh>) {
+    chomp;
+    if (/^model name\s+:\s+(.*)/) {
+      ++$summary{$1};
+    }
+  }
+  return \%summary;
+}
