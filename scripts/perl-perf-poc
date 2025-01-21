@@ -5,11 +5,25 @@ use Cwd;
 use JSON::PP;
 use FindBin;
 
+my @cfg_args;
+my $config_name = "poc";
+
+while (@ARGV && $ARGV[0] =~ /^-/) {
+  my $opt = shift;
+  if ($opt eq "-n") {
+    @ARGV or die "No argument for -n";
+    $config_name = shift;
+  }
+  elsif ($opt =~ /^-[ADU]\w+/) {
+    push @cfg_args, $opt;
+  }
+}
+
 my $gitdir = shift;
 my $commit = shift;
 my $base = shift;
 my $outfile = shift
-  or die "Usage: $0 checkoutdir sha base outfile\n";
+  or die "Usage: $0 [-n config_name] [-[ADU]name...] checkoutdir sha base outfile\n";
 
 my $start = getcwd();
 
@@ -24,7 +38,7 @@ my $absbase = File::Spec->rel2abs($base)
 my $absoutfile = File::Spec->rel2abs($outfile)
   or die "Cannot rel2abs $outfile";
 
-my $inst = "$absbase/$commit-poc";
+my $inst = "$absbase/$commit-$config_name";
 
 my $absbenchmarks = File::Spec->catfile($absgitdir, "t", "perf", "benchmarks");
 
@@ -41,6 +55,8 @@ instbase: $absbase
 inst    : $inst
 outfile : $absoutfile
 bench   : $absbench
+name    : $config_name
+cfg_args: @cfg_args
 EOS
 
 chdir $absgitdir
@@ -55,18 +71,20 @@ system "git", "checkout", "."
 system "git", "checkout", $commit
   and die "Cannot checkout $commit\n";
 
-system "./Configure", "-des", "-Dprefix=$inst", "-Uversiononly", "-Dusedevel"
+system "./Configure", "-des", "-Dprefix=$inst", "-Uversiononly",
+  "-Dusedevel", @cfg_args
   and die "Cannot configure";
 
 my %build_cfg;
-my $config_name = "$absgitdir/config.sh";
-open my $cfg_fh, "<", $config_name
-  or die "Cannot open $config_name: $!\n";
+my $confsh_name = "$absgitdir/config.sh";
+open my $cfg_fh, "<", $confsh_name
+  or die "Cannot open $confsh_name: $!\n";
 while (<$cfg_fh>) {
   next if /^#/;
   next unless /^(\w+)=(.*)$/;
   my ($key, $val) = ($1, $2);
   $val =~ s/^'(.*)'$/$1/;
+
   $build_cfg{$key} = $val;
 }
 close $cfg_fh;
