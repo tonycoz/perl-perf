@@ -5,25 +5,42 @@ use Cwd;
 use JSON::PP;
 use FindBin;
 
+my $verb = shift
+  or die <<"EOS";
+Usage:
+  $0 bench config_name gitdir sha installbase outfile
+     Build and benchmark
+  $0 buildonly config_name gitdir sha installbase outfile
+     Build only
+  $0 benchonly config_name gitdir sha installbase outfile
+     Benchmark only (requires previously built)
+EOS
+
 my @cfg_args;
-my $config_name = "poc";
+my $verbose = 0;
 
 while (@ARGV && $ARGV[0] =~ /^-/) {
   my $opt = shift;
-  if ($opt eq "-n") {
-    @ARGV or die "No argument for -n";
-    $config_name = shift;
-  }
-  elsif ($opt =~ /^-[ADU]\w+/) {
+  if ($opt =~ /^-[ADU]\w+/) {
     push @cfg_args, $opt;
+  }
+  elsif ($opt =~ /^-v$/) {
+    $verbose = 1;
+  }
+  elsif ($opt =~ /^-v(\d+)$/a) {
+    $verbose = $1;
+  }
+  else {
+    die "$0: Unknown switch $opt\n";
   }
 }
 
+my $config_name = shift;
 my $gitdir = shift;
 my $commit = shift;
 my $base = shift;
 my $outfile = shift
-  or die "Usage: $0 [-n config_name] [-[ADU]name...] checkoutdir sha base outfile\n";
+  or die "Usage: $0 [-[ADU]name...] config_name checkoutdir sha base outfile\n";
 
 my $start = getcwd();
 
@@ -49,6 +66,7 @@ my $absbenchmarks = File::Spec->catfile($absgitdir, "t", "perf", "benchmarks");
   or die "Cannot find $absbench: $!\n";
 
 print <<EOS;
+verb    : $verb
 gitdir  : $absgitdir
 commit  : $commit
 instbase: $absbase
@@ -59,39 +77,29 @@ name    : $config_name
 cfg_args: @cfg_args
 EOS
 
-chdir $absgitdir
-  or die "Cannot chdir $gitdir: $!\n";
+my $do_build = $verb =~ /^(bench|buildonly)$/;
+if ($do_build) {
+  print "Git stuff\n" if $verbose;
+  chdir $absgitdir
+    or die "Cannot chdir $gitdir: $!\n";
 
-system "git", "clean", "-dxfq"
-  and die "Cannot git clean\n";
+  system "git", "clean", "-dxfq"
+    and die "Cannot git clean\n";
 
-system "git", "checkout", "."
-  and die "Cannot checkout .\n";
+  system "git", "checkout", "."
+    and die "Cannot checkout .\n";
 
-system "git", "checkout", $commit
-  and die "Cannot checkout $commit\n";
+  system "git", "checkout", $commit
+    and die "Cannot checkout $commit\n";
 
-system "./Configure", "-des", "-Dprefix=$inst", "-Uversiononly",
-  "-Dusedevel", @cfg_args
-  and die "Cannot configure";
+  print "Configure\n" if $verbose;
+  system "./Configure", "-des", "-Dprefix=$inst", "-Uversiononly",
+    "-Dusedevel", @cfg_args
+    and die "Cannot configure";
 
-my %build_cfg;
-my $confsh_name = "$absgitdir/config.sh";
-open my $cfg_fh, "<", $confsh_name
-  or die "Cannot open $confsh_name: $!\n";
-while (<$cfg_fh>) {
-  next if /^#/;
-  next unless /^(\w+)=(.*)$/;
-  my ($key, $val) = ($1, $2);
-  $val =~ s/^'(.*)'$/$1/;
-
-  $build_cfg{$key} = $val;
-}
-close $cfg_fh;
-#$build_cfg{cc} eq "cc" or die;
-
-system "nice", "make", "-j3"
-  and die "Cannot make";
+  print "Make\n" if $verbose;
+  system "nice", "make", "-j3"
+    and die "Cannot make";
 
 # {
 #   local $ENV{TEST_JOBS} = 4;
@@ -99,60 +107,89 @@ system "nice", "make", "-j3"
 #     and die "Cannot make test";
 # }
 
-system "make", "install"
-  and die "Cannot make install";
+  print "Install\n" if $verbose;
+  system "make", "install"
+    and die "Cannot make install";
 
-system "$inst/bin/cpan", "Linux::libperf::Simple"
-  and die "Cannot install Linux::libperf::Simple";
-
-{
-  local $ENV{PERL_HASH_SEED} = "0";
-  system "$inst/bin/perl", $absbench, $absbenchmarks, $absoutfile
-    and die "Cannot run benchmark: $!";
+  print "Install libperf\n" if $verbose;
+  system "$inst/bin/cpan", "Linux::libperf::Simple"
+    and die "Cannot install Linux::libperf::Simple";
 }
 
-my $json;
+my $instperl = "$inst/bin/perl";
 
-{
-  open my $fh, "<:raw", $absoutfile
-    or die "Cannot open $absoutfile: $!\n";
-  $json = do { local $/; <$fh> };
-  close $fh;
-}
+my $do_bench = $verb =~ /^(bench|benchonly)$/;
+if ($do_bench) {
+  my %build_cfg;
 
-my $bench_data = decode_json($json);
+  #my $confsh_name = "$absgitdir/config.sh";
+  open my $cfg_fh, "-|", $instperl, "-MConfig=config_sh", "-e", "print config_sh"
+    or die "Cannot run $instperl: $!\n";
+  while (<$cfg_fh>) {
+    next if /^#/;
+    next unless /^(\w+)=(.*)$/;
+    my ($key, $val) = ($1, $2);
+    $val =~ s/^'(.*)'$/$1/;
+    
+    $build_cfg{$key} = $val;
+  }
+  close $cfg_fh;
+  #$build_cfg{cc} eq "cc" or die;
 
-# rearrange a bit
-chomp(my $uname = `uname -a`);
 
-my $deps = delete $bench_data->{dependencies} || {};
+  {
+    print "Benchmark\n" if $verbose;
+    local $ENV{PERL_HASH_SEED} = "0";
+    my @bench = ( $instperl , $absbench, "-v$verbose", $absbenchmarks, $absoutfile );
+    print "  @bench\n" if $verbose > 1;
+    system @bench
+      and die "Cannot run benchmark: $!";
+  }
 
-my %result =
-  (
-   system =>
-   {
-    uname => $build_cfg{myuname},
-    cc => $build_cfg{cc},
-    ccversion => $build_cfg{ccversion} || $build_cfg{gccversion} || "unknown",
-    cpu => cpu_info(),
-   },
-   config =>
-   {
-    config_args => [ config_args(\%build_cfg) ],
-    map { $_ => $build_cfg{$_} }
-    qw( ccflags usethreads usemultiplicity useshrplib optimize
-	uselongdouble usequadmath
-	alignbytes ),
-   },
-   benchmark => $bench_data,
-  );
+  print "Build report\n" if $verbose;
+  my $json;
 
-{
-  open my $fh, ">:raw", $absoutfile
-    or die "Cannot overwrite $absoutfile: $!\n";
-  print $fh encode_json(\%result);
-  close $fh
-    or die "Cannot close $outfile: $!\n";
+  {
+    open my $fh, "<:raw", $absoutfile
+      or die "Cannot open $absoutfile: $!\n";
+    $json = do { local $/; <$fh> };
+    close $fh;
+  }
+
+  my $bench_data = decode_json($json);
+
+  # rearrange a bit
+  chomp(my $uname = `uname -a`);
+
+  my $deps = delete $bench_data->{dependencies} || {};
+
+  my %result =
+    (
+     system =>
+     {
+      uname => $build_cfg{myuname},
+      cc => $build_cfg{cc},
+      ccversion => $build_cfg{ccversion} || $build_cfg{gccversion} || "unknown",
+      cpu => cpu_info(),
+     },
+     config =>
+     {
+      config_args => [ config_args(\%build_cfg) ],
+      map { $_ => $build_cfg{$_} }
+      qw( ccflags usethreads usemultiplicity useshrplib optimize
+	  uselongdouble usequadmath
+	  alignbytes ),
+     },
+     benchmark => $bench_data,
+    );
+
+  {
+    open my $fh, ">:raw", $absoutfile
+      or die "Cannot overwrite $absoutfile: $!\n";
+    print $fh encode_json(\%result);
+    close $fh
+      or die "Cannot close $outfile: $!\n";
+  }
 }
 
 sub config_args {

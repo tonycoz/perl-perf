@@ -2,25 +2,51 @@
 use v5.36;
 use FindBin;
 use Cwd qw(realpath);
+use LWP::UserAgent;
 
-my $config_name = "poc";
+my $ua = LWP::UserAgent->new;
+
+
+my $verb = shift
+  or die <<"EOS";
+Usage:
+  $0 bench [-vN][-D...][-A...][-U...] config_name sha ...
+    Configure/build with options, benchmark and submit
+  $0 resend [-vN] config_name sha ...
+    Resend the reports for the given config and shas.  Fails
+    if no report found for any sha.
+  $0 buildonly [-vN][-D...][-A...][-U...] config_name sha ...
+    Rebuild only for the given config, options and shas.
+  $0 benchonly [-vN] config_name sha
+    Benchmark only for the given config and shas.  Fails if not built.
+EOS
+
+$verb =~ /^(?:bench|resend|buildonly|benchonly)$/
+  or die "Unknown verb '$verb'\n";
 
 my @passthru;
+my $verbose = 0;
 
 while (@ARGV && $ARGV[0] =~ /^-/) {
   my $opt = shift;
-  if ($opt eq "-n") {
-    @ARGV or die "$0: no argument for -n";
-    $config_name = shift;
-    push @passthru, "-n", $config_name;
-  }
-  elsif ($opt =~ /^-[ADU]\w+/) {
+  if ($opt =~ /^-[ADU]\w+/) {
     push @passthru, $opt;
   }
+  elsif ($opt =~ /^-v$/) {
+    $verbose = 1;
+  }
+  elsif ($opt =~ /^-v(\d+)$/a) {
+    $verbose = $1;
+  }
   else {
-    die "Unknown argument '$opt'\n";
+    die "$0: Unknown argument '$opt'\n";
   }
 }
+
+my $config_name = shift;
+
+@ARGV
+  or die "Usage: $0 someverb config_name commit-sha ...\n";
 
 $ENV{PKG_CONFIG_PATH} = "$ENV{HOME}/local/libperf/lib64/pkgconfig/";
 
@@ -29,6 +55,7 @@ my $install = realpath("$FindBin::Bin/../../perl-perf-built");
 my $reports = realpath("$FindBin::Bin/../../perl-perf-reports");
 
 print <<"EOS";
+verbose: $verbose
 git: $git
 install: $install
 reports: $reports
@@ -43,13 +70,37 @@ for my $sha (@ARGV) {
   print "    report: $report\n";
   print "    log   : $log\n";
 
-  if (-f $report) {
+  if ($verb eq "resend") {
+    # nothing to do
+  }
+  elsif (-f $report) {
     print " Report exists, skipping build\n";
   }
   else {
-    system "perl scripts/perl-perf-poc $git $sha $install $report >$log 2>&1"
+    system "perl scripts/perl-perf-poc $verb -v$verbose $config_name $git $sha $install $report >$log 2>&1"
       and next;
   }
-  system "lwp-request -m PUT -c application/json https://perldev.develop-help.com/api/perf/vdev/report/$sha/$config_name <$report";
+  do_submit($ua, $reports, $sha, $config_name);
+  #system "lwp-request -m PUT -c application/json https://perldev.develop-help.com/api/perf/vdev/report/$sha/$config_name <$report";
+}
+
+sub do_submit {
+  my ($ua, $reports, $sha, $config_name) = @_;
+
+  print "  Submit\n";
+  my $report = "$reports/$sha-$config_name.json";
+  my $req = HTTP::Request->new(PUT => "https://perldev.develop-help.com/api/perf/vdev/report/$sha/$config_name");
+  open my $report_fh, "<", $report
+    or die "Cannot open $report: $!\n";
+  binmode $report_fh;
+  my $content = do { local $/; <$report_fh> };
+  close $report_fh;
+  # FIXME: compression
+  $req->content_type("application/json");
+  $req->content($content);
+  my $res = $ua->request($req);
+  unless ($res->is_success) {
+    die $res->status_line, "\n";
+  }
 }
 

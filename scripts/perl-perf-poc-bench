@@ -4,10 +4,16 @@ use warnings;
 use Linux::libperf::Simple;
 use JSON::PP;
 
+my $verbose = 0;
+if (@ARGV && $ARGV[0] =~ /^-v(\d+)$/a) {
+  $verbose = $1;
+  shift;
+}
 my $benchmarks = shift;
 my $outname = shift
-  or die "Usage: $0 benchmarksfile outputfile\n";
+  or die "Usage: $0 [-vN] benchmarksfile outputfile\n";
 
+print "  Building benchmarks\n" if $verbose;
 my $tests;
 $tests = do $benchmarks;
 
@@ -105,31 +111,47 @@ EOS
 }
 
 my %results;
-my $iter = 1000;
 for my $mytest (@mytests) {
   my ($name, $entry) = @$mytest;
-  print "$name\n";
-  #use Data::Dumper; print Dumper($entry);
-  my $gen = $entry->{gen} || die;
-  # prime caches			   #
-  $gen->[0]->(10);
-  my @result0;
-  for (1 .. 10) {
-    push @result0, xform_result($gen->[0]->($iter));
-  }
-  # prime caches			   #
-  $gen->[1]->(10);
-  my @result1;
-  for (1 .. 10) {
-    push @result1, xform_result($gen->[1]->($iter));
-  }
   $results{$name} =
-    {
-     result0 => _collate(\@result0),
-     result1 => _collate(\@result1),
-     code0 => $entry->{code}[0],
-     code1 => $entry->{code}[1],
-    };
+      {
+       result0 => {}, #collate(\@result0),
+       result1 => {}, #_collate(\@result1),
+       code0 => $entry->{code}[0],
+       code1 => $entry->{code}[1],
+      };
+}
+
+my $iter = 1000;
+my $bench_each = 10;
+my $bench_count = 10;
+for my $bench_run (1 .. $bench_count) {
+  print "  Run $bench_run of $bench_count\n" if $verbose > 1;
+  for my $mytest (@mytests) {
+    my ($name, $entry) = @$mytest;
+    print "$name\n";
+    my $result = $results{$name} or die;
+    #use Data::Dumper; print Dumper($entry);
+    my $gen = $entry->{gen} || die;
+    # prime caches
+    $gen->[0]->(10);
+    my $result0 = $result->{result0};
+    for my $each (1 .. $bench_each) {
+      my $run_result = xform_result($gen->[0]->($iter));
+      for my $key (keys %$run_result) {
+	push $result0->{$key}->@*, $run_result->{$key};
+      }
+    }
+    # prime caches			   #
+    $gen->[1]->(10);
+    my $result1 = $result->{result1};
+    for my $each (1 .. $bench_each) {
+      my $run_result = xform_result($gen->[0]->($iter));
+      for my $key (keys %$run_result) {
+	push $result1->{$key}->@*, $run_result->{$key};
+      }
+    }
+  }
 }
 
 # other details like the commit, cpu info will be added by the
@@ -140,6 +162,7 @@ my %full =
    {
     name => "POC-libperf",
     iterations => $iter,
+    groups => $bench_count,
    },
    version => "unknown",
    dependencies => {
