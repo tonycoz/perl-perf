@@ -122,7 +122,7 @@ for my $mytest (@mytests) {
       };
 }
 
-my $iter = 1000;
+my $iter = 5000;
 my $bench_each = 10;
 my $bench_count = 10;
 for my $bench_run (1 .. $bench_count) {
