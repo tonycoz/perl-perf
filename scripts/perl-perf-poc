@@ -40,7 +40,7 @@ my $gitdir = shift;
 my $commit = shift;
 my $base = shift;
 my $outfile = shift
-  or die "Usage: $0 [-[ADU]name...] config_name checkoutdir sha base outfile\n";
+  or die "Usage: $0 verb [-[ADU]name...] config_name checkoutdir sha base outfile\n";
 
 my $start = getcwd();
 
@@ -184,9 +184,10 @@ if ($do_bench) {
     );
 
   {
+    my $encoder = JSON::PP->new->canonical;
     open my $fh, ">:raw", $absoutfile
       or die "Cannot overwrite $absoutfile: $!\n";
-    print $fh encode_json(\%result);
+    print $fh $encoder->encode(\%result);
     close $fh
       or die "Cannot close $outfile: $!\n";
   }

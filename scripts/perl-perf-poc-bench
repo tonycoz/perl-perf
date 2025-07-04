@@ -4,11 +4,13 @@ use warnings;
 use Linux::libperf::Simple;
 use JSON::PP;
 
+++$|;
 my $verbose = 0;
 if (@ARGV && $ARGV[0] =~ /^-v(\d+)$/a) {
   $verbose = $1;
   shift;
 }
+$verbose or die "no verbose";
 my $benchmarks = shift;
 my $outname = shift
   or die "Usage: $0 [-vN] benchmarksfile outputfile\n";
@@ -122,17 +124,47 @@ for my $mytest (@mytests) {
       };
 }
 
-my $iter = 5000;
+my $base_iter = 1000;
 my $bench_each = 10;
-my $bench_count = 10;
+my $bench_count = 5;
+my $min_duration = 50_000_000; # nanoseconds
 for my $bench_run (1 .. $bench_count) {
   print "  Run $bench_run of $bench_count\n" if $verbose > 1;
   for my $mytest (@mytests) {
     my ($name, $entry) = @$mytest;
     print "$name\n";
-    my $result = $results{$name} or die;
+    my $result = $results{$name}
+      or die "internal error: no result object for $name";
     #use Data::Dumper; print Dumper($entry);
     my $gen = $entry->{gen} || die;
+
+    # prime caches
+    my $iter = $result->{iterations} = $base_iter;
+    $gen->[1]->(10);
+
+    # # make sure we get a long enough sample
+    # my $iter = $result->{iterations} || $base_iter;
+    # while (!$result->{iterations}) {
+    #   my $run_result = xform_result($gen->[1]->($iter));
+    #   my $duration = $run_result->{"task-clock"} || die;
+    #   if ($duration < $min_duration) {
+    # 	$iter = int($min_duration / $duration * $iter * 1.1);
+    # 	print "$name: New iter $iter\n";
+    #   }
+    #   else {
+    # 	$result->{iterations} = $iter;
+    # 	last;
+    #   }
+    # }
+
+    my $result1 = $result->{result1};
+    for my $each (1 .. $bench_each) {
+      my $run_result = xform_result($gen->[1]->($iter));
+      for my $key (keys %$run_result) {
+	push $result1->{$key}->@*, $run_result->{$key};
+      }
+    }
+
     # prime caches
     $gen->[0]->(10);
     my $result0 = $result->{result0};
@@ -140,15 +172,6 @@ for my $bench_run (1 .. $bench_count) {
       my $run_result = xform_result($gen->[0]->($iter));
       for my $key (keys %$run_result) {
 	push $result0->{$key}->@*, $run_result->{$key};
-      }
-    }
-    # prime caches			   #
-    $gen->[1]->(10);
-    my $result1 = $result->{result1};
-    for my $each (1 .. $bench_each) {
-      my $run_result = xform_result($gen->[0]->($iter));
-      for my $key (keys %$run_result) {
-	push $result1->{$key}->@*, $run_result->{$key};
       }
     }
   }
@@ -161,7 +184,6 @@ my %full =
    method =>
    {
     name => "POC-libperf",
-    iterations => $iter,
     groups => $bench_count,
    },
    version => "unknown",
