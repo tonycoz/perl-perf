@@ -139,23 +139,23 @@ for my $bench_run (1 .. $bench_count) {
     my $gen = $entry->{gen} || die;
 
     # prime caches
-    my $iter = $result->{iterations} = $base_iter;
+    #my $iter = $result->{iterations} = $base_iter;
     $gen->[1]->(10);
 
-    # # make sure we get a long enough sample
-    # my $iter = $result->{iterations} || $base_iter;
-    # while (!$result->{iterations}) {
-    #   my $run_result = xform_result($gen->[1]->($iter));
-    #   my $duration = $run_result->{"task-clock"} || die;
-    #   if ($duration < $min_duration) {
-    # 	$iter = int($min_duration / $duration * $iter * 1.1);
-    # 	print "$name: New iter $iter\n";
-    #   }
-    #   else {
-    # 	$result->{iterations} = $iter;
-    # 	last;
-    #   }
-    # }
+    # make sure we get a long enough sample
+    my $iter = $result->{iterations} || $base_iter;
+    while (!$result->{iterations}) {
+      my $run_result = xform_result($gen->[1]->($iter));
+      my $duration = $run_result->{"task-clock"} || die;
+      if ($duration < $min_duration) {
+	$iter = int($min_duration / $duration * $iter * 1.1);
+	print "$name: New iter $iter\n";
+      }
+      else {
+	$result->{iterations} = $iter;
+	last;
+      }
+    }
 
     my $result1 = $result->{result1};
     for my $each (1 .. $bench_each) {
